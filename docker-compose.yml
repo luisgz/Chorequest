@@ -1,0 +1,28 @@
+name: chore-quest
+
+services:
+  app:
+    build: ./app
+    container_name: chore-quest
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "8080:8080"
+    volumes:
+      - chore-data:/data   # database + photos
+
+  # Optional: reach the app from anywhere with HTTPS through a Cloudflare Tunnel.
+  # Start it with:  docker compose --profile tunnel up -d
+  # In the Cloudflare dashboard, point the tunnel's public hostname at  http://app:8080
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - app
+
+volumes:
+  chore-data:
