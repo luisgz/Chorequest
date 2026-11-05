@@ -67,6 +67,36 @@ CREATE TABLE IF NOT EXISTS ledger (
   created_at TEXT NOT NULL
 );
 
+-- Rewards shop: parents set prices, kids trade stars for rewards.
+CREATE TABLE IF NOT EXISTS rewards (
+  id         INTEGER PRIMARY KEY,
+  title      TEXT NOT NULL,
+  emoji      TEXT NOT NULL DEFAULT '🎁',
+  cost       INTEGER NOT NULL CHECK (cost > 0),
+  active     INTEGER NOT NULL DEFAULT 1,
+  deleted    INTEGER NOT NULL DEFAULT 0,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL
+);
+
+-- A kid's request to buy a reward. Pending requests hold the stars; saying no gives them back.
+-- Title, emoji and cost are copied so history stays right if the reward is edited later.
+CREATE TABLE IF NOT EXISTS reward_requests (
+  id           INTEGER PRIMARY KEY,
+  reward_id    INTEGER REFERENCES rewards(id) ON DELETE SET NULL,
+  kid_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title        TEXT NOT NULL,
+  emoji        TEXT NOT NULL,
+  cost         INTEGER NOT NULL,
+  status       TEXT NOT NULL CHECK (status IN ('pending','approved','denied','canceled')),
+  feedback     TEXT NOT NULL DEFAULT '',
+  requested_at TEXT NOT NULL,
+  reviewed_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  reviewed_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS reward_requests_status ON reward_requests(status);
+CREATE INDEX IF NOT EXISTS reward_requests_kid ON reward_requests(kid_id, requested_at);
+
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
   value TEXT

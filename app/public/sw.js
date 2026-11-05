@@ -1,5 +1,5 @@
 // Keeps the app shell available so it opens instantly. API calls always go to the network.
-const CACHE = 'chore-quest-v1';
+const CACHE = 'chore-quest-v2';
 const SHELL = ['/', '/styles.css', '/app.js', '/manifest.webmanifest',
   '/fonts/fredoka-latin-600-normal.woff2', '/fonts/nunito-latin-700-normal.woff2'];
 

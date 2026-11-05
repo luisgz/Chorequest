@@ -36,6 +36,7 @@ const ICONS = {
   today: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="15" rx="3"/><path d="M8 3v4M16 3v4M4 10h16"/><path d="M9 15l2 2 4-4"/></svg>',
   list: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 7h11M9 12h11M9 17h11"/><circle cx="4.5" cy="7" r="1.3" fill="currentColor"/><circle cx="4.5" cy="12" r="1.3" fill="currentColor"/><circle cx="4.5" cy="17" r="1.3" fill="currentColor"/></svg>',
   family: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="7.5" r="3"/><circle cx="17" cy="9.5" r="2.4"/><path d="M2.8 19a5.2 5.2 0 0 1 10.4 0"/><path d="M13.5 15.2A4.2 4.2 0 0 1 21 18"/></svg>',
+  gift: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="8.5" width="17" height="4" rx="1.2"/><path d="M5 12.5V19a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 19v-6.5M12 8.5v12"/><path d="M12 8.5C10.8 5 7.5 4.2 7 6.2c-.5 2 2.8 2.3 5 2.3zM12 8.5c1.2-3.5 4.5-4.3 5-2.3.5 2-2.8 2.3-5 2.3z"/></svg>',
   plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
 };
 const icon = (name) => h('span', { 'aria-hidden': 'true', style: { display: 'inline-flex' }, html: ICONS[name] });
@@ -50,6 +51,16 @@ function starSvg(cls = '', fill = '#FFC83D') {
 const AVATARS = ['🦊', '🐢', '🐼', '🦄', '🐯', '🐸', '🐙', '🦖', '🐝', '🐧', '🦁', '🐨', '🐶', '🐱', '🦉', '🐻'];
 const COLORS = ['#5B3FE0', '#E84A4A', '#1FA463', '#3D7BE0', '#F08C1A', '#D43F8D', '#14A3A8', '#8A5A2B'];
 const CHORE_EMOJI = ['🛏️', '🧺', '🍽️', '🐶', '🧹', '🗑️', '🪴', '📚', '🦷', '🚿', '🧸', '👕', '🧽', '🚗', '🌿', '🎒', '🎹', '✨'];
+const REWARD_EMOJI = ['📱', '🎮', '📺', '🎬', '🍔', '🍕', '🍦', '🍩', '🌙', '🛝', '🎨', '🧸', '📚', '💵', '🏊', '🚲', '🎁', '⭐'];
+// One-tap starting points for the shop. Parents set the real price in the editor.
+const REWARD_IDEAS = [
+  { emoji: '📱', title: '30 min screen time', cost: 20 },
+  { emoji: '🌙', title: 'Stay up 30 min late', cost: 30 },
+  { emoji: '🎬', title: 'Pick the family movie', cost: 15 },
+  { emoji: '🍦', title: 'Ice cream treat', cost: 25 },
+  { emoji: '🍔', title: 'Eating out', cost: 100 },
+  { emoji: '💵', title: '$5 to spend', cost: 50 },
+];
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 function avatar(u, size = '') {
@@ -74,7 +85,7 @@ async function api(method, url, body) {
 // ------------------------------------------------------------ app state
 
 const $app = document.getElementById('app');
-const state = { me: null, family: [], tab: 'review', reviewCount: 0, kidStatus: new Map() };
+const state = { me: null, family: [], tab: 'review', kidTab: 'chores', reviewCount: 0, kidStatus: new Map(), rewardStatus: new Map() };
 let events = null;
 
 function toast(msg, bad = false) {
@@ -125,7 +136,7 @@ async function boot() {
 
 function startHome() {
   connectEvents();
-  if (state.me.role === 'kid') { state.kidStatus.clear(); loadKid(true); } else renderParent();
+  if (state.me.role === 'kid') { state.kidStatus.clear(); state.rewardStatus.clear(); state.kidTab = 'chores'; loadKid(true); } else renderParent();
 }
 
 function signedOut() {
@@ -156,6 +167,10 @@ function openSheet(build, { label = 'Details' } = {}) {
   const ctl = { close, body, rerender: () => body.replaceChildren(...[build(ctl)].flat(Infinity).filter((n) => n != null && n !== false)) };
   ctl.rerender();
   return ctl;
+}
+// replaceChildren that skips empty bits and flattens arrays.
+function fill(el, ...children) {
+  el.replaceChildren(...children.flat(Infinity).filter((n) => n != null && n !== false));
 }
 function closeAllSheets() { document.querySelectorAll('.scrim, .lightbox').forEach((s) => s.remove()); }
 
@@ -339,9 +354,17 @@ async function compressPhoto(file) {
 async function loadKid(first = false) {
   if (first) $app.replaceChildren(h('div', { class: 'spinner', role: 'status', 'aria-label': 'Loading' }));
   try {
-    const data = await api('GET', '/api/today');
-    renderKid(data, first);
+    if (state.kidTab === 'shop') renderShop(await api('GET', '/api/shop'), first);
+    else renderKid(await api('GET', '/api/today'), first);
   } catch (e) { toast(e.message, true); }
+}
+
+function kidTabs() {
+  const tab = (id, label, ic) => h('button', {
+    class: state.kidTab === id ? 'on' : '', 'aria-current': state.kidTab === id ? 'page' : null,
+    onclick: () => { if (state.kidTab !== id) { state.kidTab = id; window.scrollTo(0, 0); loadKid(true); } },
+  }, icon(ic), label);
+  return h('nav', { class: 'tabs kid-tabs', 'aria-label': 'Sections' }, tab('chores', 'My chores', 'list'), tab('shop', 'Shop', 'gift'));
 }
 
 function renderKid(data, first) {
@@ -384,7 +407,107 @@ function renderKid(data, first) {
     : h('div', { class: 'empty' }, h('div', { class: 'big-emoji' }, '🎈'), h('h2', {}, 'No chores today'), h('p', {}, 'Enjoy your free time!'));
 
   $app.replaceChildren(h('div', { class: 'wrap' }, head, progress, body,
-    h('div', { class: 'switch-user' }, h('button', { class: 'btn ghost', onclick: logout }, 'Switch person'))));
+    h('div', { class: 'switch-user' }, h('button', { class: 'btn ghost', onclick: logout }, 'Switch person'))), kidTabs());
+}
+
+// ------------------------------------------------------------ KID: rewards shop
+
+function renderShop(data, first) {
+  const me = state.me;
+  const points = data.points;
+
+  // Celebrate when a parent says yes while the shop is open.
+  let yes = false;
+  for (const r of data.requests) {
+    const prev = state.rewardStatus.get(r.id);
+    if (!first && prev === 'pending' && r.status === 'approved') yes = true;
+    state.rewardStatus.set(r.id, r.status);
+  }
+  if (yes) { celebrate(); toast('A parent said yes. Enjoy! 🎉'); }
+
+  const waiting = data.requests.filter((r) => r.status === 'pending');
+  const weekAgo = Date.now() - 7 * 86400_000;
+  const answered = data.requests.filter((r) => ['approved', 'denied'].includes(r.status) && new Date(r.reviewed_at).getTime() > weekAgo);
+
+  const head = h('header', { class: 'kid-head' },
+    avatar(me, 'lg'),
+    h('div', { class: 'grow' }, h('h1', {}, 'Rewards shop'), h('div', { class: 'date' }, 'Trade your stars for treats')),
+    starsPill(points));
+
+  const waitingBlock = waiting.length ? h('section', { class: 'group' },
+    h('h2', {}, 'Waiting for a parent', h('span', { class: 'count' }, `(${waiting.length})`)),
+    h('div', { class: 'cards two' }, waiting.map((r) => h('div', { class: 'reward pending' },
+      h('span', { class: 'sticker' }, r.emoji),
+      h('span', { class: 'body' }, h('span', { class: 'title' }, r.title),
+        h('span', { class: 'meta' }, `${starsWord(r.cost)} saved for this`)),
+      h('button', {
+        class: 'btn ghost small', async onclick(e) {
+          e.currentTarget.disabled = true;
+          try { await api('POST', `/api/reward-requests/${r.id}/cancel`); toast('Canceled. Your stars are back.'); loadKid(); }
+          catch (ex) { toast(ex.message, true); loadKid(); }
+        },
+      }, 'Cancel'))))) : null;
+
+  const shopBlock = data.rewards.length ? h('section', { class: 'group' },
+    h('h2', {}, 'In the shop'),
+    h('div', { class: 'cards two' }, data.rewards.map((r) => {
+      const can = points >= r.cost;
+      const pct = Math.max(0, Math.min(100, Math.round((points / r.cost) * 100)));
+      return h('button', {
+        class: `reward${can ? ' can' : ''}`, onclick: () => openRedeem(r, points),
+        'aria-label': `${r.title}, ${starsWord(r.cost)}${can ? '' : `, you need ${r.cost - points} more`}`,
+      },
+      h('span', { class: 'sticker' }, r.emoji),
+      h('span', { class: 'body' },
+        h('span', { class: 'title' }, r.title),
+        can ? h('span', { class: 'meta ok' }, 'You can get this!')
+          : h('span', { class: 'need' }, h('span', { class: 'bar', 'aria-hidden': 'true' }, h('i', { style: { width: `${pct}%` } })),
+            h('span', { class: 'meta' }, `${r.cost - points} more to go`))),
+      h('span', { class: 'price' }, starSvg('', '#FFC83D'), String(r.cost)));
+    }))) : h('div', { class: 'empty' }, h('div', { class: 'big-emoji' }, '🎁'), h('h2', {}, 'The shop is empty'),
+    h('p', {}, 'Ask a parent to add some rewards.'));
+
+  const answeredBlock = answered.length ? h('section', { class: 'group' },
+    h('h2', {}, 'This week'),
+    h('div', { class: 'cards two' }, answered.map((r) => h('div', { class: `reward ${r.status}` },
+      h('span', { class: 'sticker' }, r.emoji),
+      h('span', { class: 'body' }, h('span', { class: 'title' }, r.title),
+        h('span', { class: 'meta' }, r.status === 'approved' ? `Yes! Enjoy · ${starsWord(r.cost)}` : 'Not this time. Your stars came back.'),
+        r.feedback ? h('span', { class: 'feedback' }, `“${r.feedback}”`) : null),
+      h('span', { class: `pill ${r.status === 'approved' ? 'approved' : 'rejected'}` }, r.status === 'approved' ? 'Yes' : 'Not now'))))) : null;
+
+  fill($app, h('div', { class: 'wrap' }, head, waitingBlock, shopBlock, answeredBlock,
+    h('p', { class: 'hint', style: { textAlign: 'center', marginTop: '26px' } }, 'Stars never reset, so you can save up for the big ones!')), kidTabs());
+}
+
+function openRedeem(r, points) {
+  const can = points >= r.cost;
+  let sending = false;
+  const sheet = openSheet(({ close }) => {
+    const out = [sheetHead(r.title, close, h('span', { class: 'sticker' }, r.emoji))];
+    if (!can) {
+      out.push(h('div', { class: 'callout wait' }, `This costs ${starsWord(r.cost)}. You have ${points}, so you need ${r.cost - points} more.`),
+        h('p', { class: 'desc' }, 'Finish more chores to earn stars, then come back!'),
+        h('div', { class: 'footer' }, h('button', { class: 'btn ghost block', onclick: close }, 'OK')));
+      return out;
+    }
+    out.push(h('p', { class: 'desc' }, `Trade ${starsWord(r.cost)} for this? You’ll have ${starsWord(points - r.cost)} left.`),
+      h('p', { class: 'hint', style: { margin: '0 0 6px' } }, 'A parent has to say yes. If they say no, you get your stars back.'),
+      h('div', { class: 'footer' },
+        h('button', {
+          class: 'btn big leaf block', disabled: sending, async onclick() {
+            if (sending) return;
+            sending = true; sheet.rerender();
+            try {
+              const res = await api('POST', `/api/rewards/${r.id}/redeem`);
+              state.rewardStatus.set(res.request.id, 'pending');
+              close(); toast('Sent! A parent will say yes or no.'); loadKid();
+            } catch (e) { sending = false; sheet.rerender(); toast(e.message, true); }
+          },
+        }, sending ? 'Sending…' : `Yes, use ${r.cost} ⭐`),
+        h('button', { class: 'btn ghost block', onclick: close }, 'Not now')));
+    return out;
+  }, { label: r.title });
 }
 
 function kidMeta(it) {
@@ -490,6 +613,7 @@ const TABS = [
   { id: 'review', label: 'Check', icon: 'inbox' },
   { id: 'today', label: 'Today', icon: 'today' },
   { id: 'chores', label: 'Chores', icon: 'list' },
+  { id: 'rewards', label: 'Rewards', icon: 'gift' },
   { id: 'family', label: 'Family', icon: 'family' },
 ];
 
@@ -522,15 +646,17 @@ async function loadParentTab() {
   const main = document.getElementById('parent-main');
   if (!main) return renderParent();
   try {
-    // Keep the badge fresh whatever tab is open.
-    const review = await api('GET', '/api/review');
-    if (review.items.length !== state.reviewCount) {
-      state.reviewCount = review.items.length;
+    // Keep the badge fresh whatever tab is open (chores to check + rewards to answer).
+    const [review, asks] = await Promise.all([api('GET', '/api/review'), api('GET', '/api/reward-requests')]);
+    const count = review.items.length + asks.items.length;
+    if (count !== state.reviewCount) {
+      state.reviewCount = count;
       const tabBtn = document.querySelector('.tabs button');
       tabBtn?.querySelector('.badge')?.remove();
       if (state.reviewCount) tabBtn?.append(h('span', { class: 'badge' }, String(state.reviewCount)));
     }
-    if (state.tab === 'review') return renderReview(main, review.items);
+    if (state.tab === 'review') return renderReview(main, review.items, asks.items);
+    if (state.tab === 'rewards') return renderRewards(main, (await api('GET', '/api/rewards')).items);
     if (state.tab === 'today') return renderToday(main, await api('GET', '/api/today'));
     if (state.tab === 'chores') {
       const [chores, users] = await Promise.all([api('GET', '/api/chores'), api('GET', '/api/users')]);
@@ -547,7 +673,15 @@ async function loadParentTab() {
 
 // ---- Check (review queue)
 
-function renderReview(main, items) {
+function renderReview(main, items, asks = []) {
+  const askList = asks.map((r) => h('article', { class: 'panel ask' },
+    h('div', { class: 'who-line' }, avatar(r.kid),
+      h('div', { style: { flex: 1, minWidth: 0 } }, h('div', { class: 'title' }, `${r.emoji} ${r.title}`),
+        h('div', { class: 'sub' }, `${r.kid.name} wants this · ${starsWord(r.cost)} · ${timeAgo(r.requested_at)}`))),
+    h('div', { class: 'actions' },
+      h('button', { class: 'btn coral', onclick: () => sayNotNow(r) }, 'Not now'),
+      h('button', { class: 'btn leaf', onclick: (e) => approveReward(r, e.currentTarget) }, 'Approve 🎁'))));
+
   const list = items.map((s) => h('article', { class: 'panel review' },
     s.photo ? h('button', { class: 'photo', 'aria-label': 'Open photo full screen', onclick: () => lightbox(s.photo) },
       h('img', { src: s.photo, alt: `${s.kid.name}: ${s.chore.title}`, loading: 'lazy' })) : null,
@@ -561,10 +695,41 @@ function renderReview(main, items) {
         h('button', { class: 'btn leaf', onclick: (e) => approve(s, e.currentTarget) },
           s.chore.points ? `Approve +${s.chore.points} ⭐` : 'Approve')))));
 
-  main.replaceChildren(parentTop('Check'),
+  fill(main, parentTop('Check'),
+    asks.length ? [h('div', { class: 'section-head' }, h('h2', {}, 'Reward requests')), h('div', { class: 'ask-list' }, askList)] : null,
+    asks.length && items.length ? h('div', { class: 'section-head' }, h('h2', {}, 'Chores')) : null,
     items.length ? h('div', { class: 'review-list' }, list)
-      : h('div', { class: 'empty' }, h('div', { class: 'big-emoji' }, '✅'), h('h2', {}, 'Nothing to check'),
-        h('p', {}, 'When the kids finish a chore, it shows up here.')));
+      : (asks.length ? null : h('div', { class: 'empty' }, h('div', { class: 'big-emoji' }, '✅'), h('h2', {}, 'Nothing to check'),
+        h('p', {}, 'When the kids finish a chore or ask for a reward, it shows up here.'))));
+}
+
+async function approveReward(r, btn) {
+  btn.disabled = true;
+  try {
+    await api('POST', `/api/reward-requests/${r.id}/review`, { decision: 'approve' });
+    toast(`Approved. ${r.kid.name} gets “${r.title}”.`);
+    loadParentTab();
+  } catch (e) { btn.disabled = false; toast(e.message, true); loadParentTab(); }
+}
+
+function sayNotNow(r) {
+  const reasons = ['Maybe this weekend', 'Not today', 'Ask me again later', 'Finish your chores first'];
+  const text = h('textarea', { class: 'input', placeholder: `Tell ${r.kid.name} why (optional)`, maxlength: 300 });
+  openSheet(({ close }) => [
+    sheetHead('Not now', close),
+    h('p', { class: 'desc' }, `${r.emoji} ${r.title}: ${r.kid.name} gets the ${starsWord(r.cost)} back.`),
+    h('div', { class: 'chips', style: { marginBottom: '12px' } },
+      reasons.map((x) => h('button', { class: 'chip', type: 'button', onclick: () => { text.value = x; } }, x))),
+    text,
+    h('div', { class: 'footer' }, h('button', {
+      class: 'btn block', async onclick() {
+        try {
+          await api('POST', `/api/reward-requests/${r.id}/review`, { decision: 'deny', feedback: text.value });
+          close(); toast(`${r.kid.name}’s stars were returned.`); loadParentTab();
+        } catch (e) { toast(e.message, true); }
+      },
+    }, 'Say not now')),
+  ], { label: 'Not now' });
 }
 
 async function approve(s, btn) {
@@ -738,6 +903,67 @@ function openChoreEditor(chore, kids) {
   }, { label: chore ? 'Edit chore' : 'New chore' });
 }
 
+// ---- Rewards (the shop)
+
+function renderRewards(main, rewards) {
+  const addBtn = h('button', { class: 'btn small', onclick: () => openRewardEditor(null) }, icon('plus'), 'New reward');
+  const have = new Set(rewards.map((r) => r.title.toLowerCase()));
+  const ideas = REWARD_IDEAS.filter((i) => !have.has(i.title.toLowerCase()));
+  const list = rewards.map((r) => h('button', { class: 'row', onclick: () => openRewardEditor(r) },
+    h('span', { class: 'emoji' }, r.emoji),
+    h('span', { class: 'grow' }, h('span', { class: 't', style: { display: 'block' } }, r.title),
+      h('span', { class: 's' }, starsWord(r.cost))),
+    r.active ? h('span', { class: 'pill' }, 'Edit') : h('span', { class: 'pill paused' }, 'Hidden')));
+  fill(main, parentTop('Rewards', addBtn),
+    h('p', { class: 'hint', style: { margin: '-8px 0 16px' } },
+      'Kids trade their stars for these in their Shop tab. You approve each one, and stars never reset, so they can save up.'),
+    rewards.length ? h('div', { class: 'panel', style: { paddingTop: '6px', paddingBottom: '6px' } }, h('div', { class: 'rows', style: { marginTop: 0 } }, list))
+      : h('div', { class: 'empty', style: { paddingBottom: '10px' } }, h('div', { class: 'big-emoji' }, '🎁'), h('h2', {}, 'No rewards yet'),
+        h('p', {}, 'Add your own, or start from an idea below and set your price.')),
+    ideas.length ? [h('div', { class: 'section-head' }, h('h2', {}, 'Ideas')),
+      h('div', { class: 'chips' }, ideas.map((i) => h('button', { class: 'chip', type: 'button', onclick: () => openRewardEditor(null, i) }, `${i.emoji} ${i.title}`)))] : null);
+}
+
+function openRewardEditor(reward, idea) {
+  const f = reward ? { ...reward } : { title: idea?.title || '', emoji: idea?.emoji || '🎁', cost: idea?.cost || 20, active: true };
+  const err = h('div', { class: 'error-text', role: 'alert' });
+  const title = h('input', { class: 'input', value: f.title, placeholder: '30 min screen time', maxlength: 60, oninput: (e) => { f.title = e.target.value; } });
+  const cost = h('input', { class: 'input cost-input', type: 'number', inputmode: 'numeric', min: 1, step: 1, value: String(f.cost), 'aria-label': 'Price in stars', oninput: (e) => { f.cost = e.target.value; } });
+  const bump = (d) => { const n = Math.max(1, (parseInt(cost.value, 10) || 0) + d); cost.value = String(n); f.cost = n; };
+
+  openSheet(({ close }) => [
+    sheetHead(reward ? 'Edit reward' : 'New reward', close),
+    h('div', { class: 'form' },
+      h('label', { class: 'field' }, h('span', {}, 'Reward'), title),
+      h('div', { class: 'field' }, h('span', {}, 'Icon'), chipPicker(REWARD_EMOJI, f.emoji, (v) => { f.emoji = v; }, 'emoji')),
+      h('div', { class: 'field' }, h('span', {}, 'Price in stars'),
+        h('div', { class: 'stepper' },
+          h('button', { type: 'button', 'aria-label': '5 fewer stars', onclick: () => bump(-5) }, '−'), cost,
+          h('button', { type: 'button', 'aria-label': '5 more stars', onclick: () => bump(5) }, '+'))),
+      reward ? h('label', { class: 'toggle' }, h('span', {}, 'Show in the shop'),
+        h('input', { type: 'checkbox', checked: f.active, onchange: (e) => { f.active = e.target.checked; } })) : null,
+      err),
+    h('div', { class: 'footer' },
+      h('button', {
+        class: 'btn big block', async onclick() {
+          err.textContent = '';
+          const body = { title: f.title, emoji: f.emoji, cost: Number(f.cost), active: f.active };
+          try {
+            if (reward) await api('PATCH', `/api/rewards/${reward.id}`, body);
+            else await api('POST', '/api/rewards', body);
+            close(); toast(reward ? 'Reward saved.' : 'Reward added to the shop.'); loadParentTab();
+          } catch (e) { err.textContent = e.message; }
+        },
+      }, reward ? 'Save reward' : 'Add to shop'),
+      reward ? h('button', {
+        class: 'btn danger block', async onclick() {
+          if (!confirm(`Delete “${reward.title}”? Past purchases stay in the history.`)) return;
+          try { await api('DELETE', `/api/rewards/${reward.id}`); close(); toast('Reward deleted.'); loadParentTab(); } catch (e) { toast(e.message, true); }
+        },
+      }, 'Delete reward') : null),
+  ], { label: reward ? 'Edit reward' : 'New reward' });
+}
+
 // ---- Family
 
 function renderFamily(main, users) {
@@ -830,7 +1056,9 @@ async function openHistory(kid) {
     const merged = [
       ...data.items.map((s) => ({ at: s.submitted_at, s })),
       ...data.ledger.map((l) => ({ at: l.created_at, l })),
+      ...(data.rewards || []).map((r) => ({ at: r.requested_at, r })),
     ].sort((a, b) => (a.at < b.at ? 1 : -1));
+    const REWARD_TEXT = { pending: 'Waiting', approved: 'Bought', denied: 'Said no', canceled: 'Canceled' };
 
     return [
       sheetHead(kid.name, close, avatar(kid, 'lg')),
@@ -843,7 +1071,13 @@ async function openHistory(kid) {
           h('button', { class: 'btn coral', onclick: () => adjust(-1) }, 'Use stars'),
           h('button', { class: 'btn ghost', onclick: () => adjust(1) }, 'Add stars'))),
       h('h3', { style: { fontSize: '20px', margin: '22px 0 6px' } }, 'History'),
-      merged.length ? merged.map(({ s, l }) => (s
+      merged.length ? merged.map(({ s, l, r }) => (r
+        ? h('div', { class: 'history-item' },
+          h('span', { class: 'thumb' }, r.emoji),
+          h('div', { style: { flex: 1, minWidth: 0 } }, h('div', { style: { fontWeight: 800 } }, r.title),
+            h('div', { class: 'hint' }, `${timeAgo(r.requested_at)} · ${['denied', 'canceled'].includes(r.status) ? 'stars returned' : `−${starsWord(r.cost)}`}${r.by_name ? ` · ${r.by_name}` : ''}`)),
+          h('span', { class: `pill ${r.status === 'approved' ? 'approved' : r.status === 'pending' ? 'pending' : 'rejected'}` }, REWARD_TEXT[r.status]))
+        : s
         ? h('div', { class: 'history-item' },
           h('button', { class: 'thumb', 'aria-label': 'Open photo', onclick: () => s.photo && lightbox(s.photo) },
             s.photo ? h('img', { src: s.photo, alt: '', loading: 'lazy' }) : s.chore.emoji),

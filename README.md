@@ -1,9 +1,10 @@
 # Chore Quest
 
-A small self-hosted chore app for the family. Parents add chores, kids see today's list on their iPad or iPhone, take a photo to prove a chore is done, and a parent approves it or sends it back. Approved chores earn stars, which parents can "spend" for rewards.
+A small self-hosted chore app for the family. Parents add chores, kids see today's list on their iPad or iPhone, take a photo to prove a chore is done, and a parent approves it or sends it back. Approved chores earn stars, and kids trade them for rewards in their **Shop** (screen time, eating out, whatever you set). Stars never reset, so kids can save up.
 
 - **Kids** sign in by tapping their avatar and typing a 4–6 digit PIN.
-- **Parents** sign in with a password and get four tabs: **Check** (photos waiting for review), **Today** (each kid's progress), **Chores**, and **Family**.
+- **Parents** sign in with a password and get five tabs: **Check** (photos and reward requests waiting for you), **Today** (each kid's progress), **Chores**, **Rewards**, and **Family**.
+- **Rewards:** in the parent **Rewards** tab, add rewards and set their price in stars. Kids ask for one in their Shop tab, the stars are held, and it shows up in **Check** for a parent to approve. Saying "not now" gives the stars back.
 - Chores can repeat **every day**, on **certain days**, **once a week** (any day, resets Monday), or be **one-time** with an optional due date.
 - Updates show up live on every device. Photos are shrunk on the phone before upload (~300 KB) and deleted automatically after 30 days (configurable). History and stars are kept.
 

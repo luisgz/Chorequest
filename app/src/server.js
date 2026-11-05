@@ -76,10 +76,13 @@ function validateSecret(role, secret) {
 
 const publicUser = (u) => u && ({ id: u.id, name: u.name, role: u.role, emoji: u.emoji, color: u.color });
 
+// Stars never reset: everything earned, plus parent adjustments, minus rewards bought.
+// Rewards waiting for a parent already count as spent, so the same stars can't be used twice.
 function pointsFor(kidId) {
   const earned = one(`SELECT COALESCE(SUM(points),0) AS n FROM submissions WHERE kid_id = ? AND status = 'approved'`, kidId).n;
   const adjust = one(`SELECT COALESCE(SUM(amount),0) AS n FROM ledger WHERE kid_id = ?`, kidId).n;
-  return Number(earned) + Number(adjust);
+  const spent = one(`SELECT COALESCE(SUM(cost),0) AS n FROM reward_requests WHERE kid_id = ? AND status IN ('pending','approved')`, kidId).n;
+  return Number(earned) + Number(adjust) - Number(spent);
 }
 
 // ---------------------------------------------------------------- live updates (SSE)
@@ -477,7 +480,9 @@ app.get('/api/history', requireUser, (req, res) => {
   const items = all(`${reviewSelect} WHERE s.kid_id = ? ORDER BY s.submitted_at DESC LIMIT ?`, kidId, limit).map(reviewOut);
   const ledger = all(`SELECT l.*, u.name AS by_name FROM ledger l LEFT JOIN users u ON u.id = l.created_by
                       WHERE l.kid_id = ? ORDER BY l.created_at DESC LIMIT 50`, kidId);
-  res.json({ items, ledger, points: pointsFor(kidId) });
+  const rewards = all(`SELECT r.*, u.name AS by_name FROM reward_requests r LEFT JOIN users u ON u.id = r.reviewed_by
+                       WHERE r.kid_id = ? ORDER BY r.requested_at DESC LIMIT 50`, kidId).map(requestOut);
+  res.json({ items, ledger, rewards, points: pointsFor(kidId) });
 });
 
 // ---- parent: chores
@@ -623,6 +628,132 @@ app.post('/api/ledger', requireParent, (req, res) => {
     kid.id, amount, cleanText(req.body.reason, 100, 'Reason'), req.user.id, now());
   broadcast({ kind: 'points' });
   res.json({ points: pointsFor(kid.id) });
+});
+
+// ---- rewards shop
+
+function rewardOut(r) {
+  return { id: r.id, title: r.title, emoji: r.emoji, cost: r.cost, active: !!r.active };
+}
+
+function requestOut(r) {
+  return {
+    id: r.id, reward_id: r.reward_id, kid_id: r.kid_id, title: r.title, emoji: r.emoji, cost: r.cost,
+    status: r.status, feedback: r.feedback, requested_at: r.requested_at, reviewed_at: r.reviewed_at,
+    by_name: r.by_name ?? null,
+    kid: r.kid_name ? { id: r.kid_id, name: r.kid_name, emoji: r.kid_emoji, color: r.kid_color } : undefined,
+  };
+}
+
+function rewardInput(body, existing = {}) {
+  const pick = (k) => (body[k] !== undefined ? body[k] : existing[k]);
+  const title = cleanText(pick('title'), 60, 'Reward');
+  if (!title) fail(400, 'Give the reward a name.');
+  const cost = Number(pick('cost'));
+  if (!Number.isInteger(cost) || cost < 1 || cost > 100000) fail(400, 'The price must be a whole number of stars, at least 1.');
+  return {
+    title,
+    emoji: cleanEmoji(pick('emoji'), '🎁'),
+    cost,
+    active: pick('active') === undefined ? 1 : (pick('active') ? 1 : 0),
+  };
+}
+
+// Parents see every reward (paused ones too); kids only see what's for sale.
+app.get('/api/rewards', requireUser, (req, res) => {
+  const items = req.user.role === 'parent'
+    ? all('SELECT * FROM rewards WHERE deleted = 0 ORDER BY active DESC, cost, id')
+    : all('SELECT * FROM rewards WHERE deleted = 0 AND active = 1 ORDER BY cost, id');
+  res.json({ items: items.map(rewardOut) });
+});
+
+app.post('/api/rewards', requireParent, (req, res) => {
+  const r = rewardInput(req.body);
+  const out = run(`INSERT INTO rewards(title, emoji, cost, active, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+    r.title, r.emoji, r.cost, r.active, req.user.id, now());
+  broadcast({ kind: 'rewards' });
+  res.json({ reward: rewardOut(one('SELECT * FROM rewards WHERE id = ?', Number(out.lastInsertRowid))) });
+});
+
+app.patch('/api/rewards/:id', requireParent, (req, res) => {
+  const existing = one('SELECT * FROM rewards WHERE id = ? AND deleted = 0', Number(req.params.id));
+  if (!existing) fail(404, 'That reward was not found.');
+  const r = rewardInput(req.body, existing);
+  run('UPDATE rewards SET title = ?, emoji = ?, cost = ?, active = ? WHERE id = ?', r.title, r.emoji, r.cost, r.active, existing.id);
+  broadcast({ kind: 'rewards' });
+  res.json({ reward: rewardOut(one('SELECT * FROM rewards WHERE id = ?', existing.id)) });
+});
+
+app.delete('/api/rewards/:id', requireParent, (req, res) => {
+  const r = one('SELECT * FROM rewards WHERE id = ? AND deleted = 0', Number(req.params.id));
+  if (!r) fail(404, 'That reward was not found.');
+  // Soft delete, so past purchases still show in history. Requests already waiting stay waiting.
+  run('UPDATE rewards SET deleted = 1, active = 0 WHERE id = ?', r.id);
+  broadcast({ kind: 'rewards' });
+  res.json({ ok: true });
+});
+
+// Kid's shop: balance, what's for sale, and their recent requests.
+app.get('/api/shop', requireUser, (req, res) => {
+  const kidId = req.user.role === 'kid' ? req.user.id : Number(req.query.kid_id);
+  if (!one(`SELECT 1 FROM users WHERE id = ? AND role = 'kid'`, kidId)) fail(400, 'Choose a kid.');
+  res.json({
+    points: pointsFor(kidId),
+    rewards: all('SELECT * FROM rewards WHERE deleted = 0 AND active = 1 ORDER BY cost, id').map(rewardOut),
+    requests: all(`SELECT * FROM reward_requests WHERE kid_id = ? ORDER BY requested_at DESC LIMIT 20`, kidId).map(requestOut),
+  });
+});
+
+// Kid asks for a reward. The stars are held right away; a parent approves or says no.
+app.post('/api/rewards/:id/redeem', requireUser, (req, res) => {
+  if (req.user.role !== 'kid') fail(403, 'Only kids can trade their stars.');
+  const kid = req.user;
+  const id = tx(db, () => {
+    const r = one('SELECT * FROM rewards WHERE id = ? AND deleted = 0 AND active = 1', Number(req.params.id));
+    if (!r) fail(404, 'That reward is not in the shop anymore.');
+    const have = pointsFor(kid.id);
+    if (have < r.cost) fail(400, `You need ${r.cost - have} more star${r.cost - have === 1 ? '' : 's'} for that.`);
+    const out = run(`INSERT INTO reward_requests(reward_id, kid_id, title, emoji, cost, status, requested_at)
+                     VALUES (?, ?, ?, ?, ?, 'pending', ?)`, r.id, kid.id, r.title, r.emoji, r.cost, now());
+    return Number(out.lastInsertRowid);
+  });
+  const reqRow = one('SELECT * FROM reward_requests WHERE id = ?', id);
+  broadcast({ kind: 'reward-request' });
+  notifyParents(`${kid.name} wants a reward`, `${kid.name} wants "${reqRow.title}" for ${reqRow.cost} stars. Tap to approve.`);
+  res.json({ request: requestOut(reqRow), points: pointsFor(kid.id) });
+});
+
+// Kid changes their mind while it's still waiting: stars come straight back.
+app.post('/api/reward-requests/:id/cancel', requireUser, (req, res) => {
+  const r = one('SELECT * FROM reward_requests WHERE id = ?', Number(req.params.id));
+  if (!r || (req.user.role === 'kid' && r.kid_id !== req.user.id)) fail(404, 'That request was not found.');
+  if (r.status !== 'pending') fail(409, 'A parent already answered this one.');
+  run(`UPDATE reward_requests SET status = 'canceled', reviewed_at = ? WHERE id = ?`, now(), r.id);
+  broadcast({ kind: 'reward-request' });
+  res.json({ ok: true, points: pointsFor(r.kid_id) });
+});
+
+const requestSelect = `
+  SELECT r.*, u.name AS kid_name, u.emoji AS kid_emoji, u.color AS kid_color
+  FROM reward_requests r JOIN users u ON u.id = r.kid_id`;
+
+app.get('/api/reward-requests', requireParent, (_req, res) => {
+  res.json({ items: all(`${requestSelect} WHERE r.status = 'pending' ORDER BY r.requested_at`).map(requestOut) });
+});
+
+app.post('/api/reward-requests/:id/review', requireParent, (req, res) => {
+  const decision = req.body.decision;
+  if (!['approve', 'deny'].includes(decision)) fail(400, 'Choose approve or not now.');
+  const feedback = cleanText(req.body.feedback, 300, 'Note');
+  tx(db, () => {
+    const r = one('SELECT * FROM reward_requests WHERE id = ?', Number(req.params.id));
+    if (!r) fail(404, 'That request was not found.');
+    if (r.status !== 'pending') fail(409, 'Someone already answered this one.');
+    run(`UPDATE reward_requests SET status = ?, feedback = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ?`,
+      decision === 'approve' ? 'approved' : 'denied', feedback, req.user.id, now(), r.id);
+  });
+  broadcast({ kind: 'reward-review' });
+  res.json({ request: requestOut(one(`${requestSelect} WHERE r.id = ?`, Number(req.params.id))) });
 });
 
 // ---- static app
